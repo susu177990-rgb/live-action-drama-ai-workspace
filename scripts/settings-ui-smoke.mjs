@@ -1,0 +1,56 @@
+import { chromium, expect } from '@playwright/test';
+import { emptyState } from '../dist-server/server/store.js';
+import assert from 'node:assert/strict';
+const state=emptyState('/tmp/settings-ui-fixture');state.apiKeySet=true;state.llmApiKeySet=true;state.settings={...state.settings,llmProvider:'codex',imageProvider:'codex',llmApiBaseUrl:'',llmApiModel:'',imageApiBaseUrl:'',imageApiModel:'',llmApiKey:'',imageApiKey:''};
+const commands=[];
+const browser=await chromium.launch();const page=await browser.newPage({viewport:{width:1440,height:1050}});
+await page.route('**/api/state',r=>r.fulfill({json:state}));
+await page.route('**/api/command',async r=>{const c=r.request().postDataJSON();if(c.type==='settings.secrets'){await new Promise(resolve=>setTimeout(resolve,1000));await r.fulfill({json:{state,result:{apiKey:'video-key-fixture',llmApiKey:'llm-key-fixture',imageApiKey:''}}});return;}if(c.type==='settings.chooseFolder'){await r.fulfill({json:{state,result:c.kind==='storage'?'/tmp/selected-work-files':null}});return;}if(c.type==='codex.models'){await r.fulfill({json:{state,result:[{model:'fixture-model',displayName:'Fixture Model',isDefault:true}]}});return;}if(c.type==='codex.connection.status'){await r.fulfill({json:{state,result:{status:'idle',authenticated:true,message:'测试登录',imageAvailable:true}}});return;}commands.push(c);await r.fulfill({json:{state,result:{ok:true}}});});
+try{
+ await page.goto('http://127.0.0.1:5173');await page.getByRole('button',{name:'设置',exact:true}).click();
+ await expect(page.getByLabel('FFmpeg 路径',{exact:true})).toHaveCount(0);await expect(page.getByLabel('FFprobe 路径',{exact:true})).toHaveCount(0);await expect(page.getByLabel('数据目录',{exact:true})).toBeVisible();
+ await expect(page.getByLabel('API Base URL')).toHaveCount(0);
+ 
+ await page.locator('.folder-picker-row').nth(0).getByRole('button').click();await expect(page.getByLabel('数据目录',{exact:true})).toHaveText('/tmp/selected-work-files');await page.locator('.folder-picker-row').nth(1).getByRole('button').click();await expect(page.getByLabel('导出目录',{exact:true})).toHaveText('/tmp/selected-work-files/exports');await page.screenshot({path:'docs/v2/verification/settings-software.png'});
+ await page.getByRole('button',{name:'API 设置',exact:true}).click();
+ await expect(page.getByRole('button',{name:'读取设置…',exact:true})).toBeDisabled();
+ await expect(page.getByRole('button',{name:'保存设置',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'检测连接',exact:true})).toBeVisible();
+ await page.getByLabel('模型',{exact:true}).selectOption('fixture-model');
+ await page.getByRole('button',{name:'生图',exact:true}).click();
+ await expect(page.getByLabel('生图来源',{exact:true})).toHaveCount(0);await expect(page.getByText('生图工具开关',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel(/API Key/)).toHaveCount(0);
+ await page.getByRole('button',{name:'自定义 API',exact:true}).click();
+ await page.getByLabel('完整 Base URL',{exact:true}).fill('https://image.example.invalid/v1');
+ await page.getByLabel('模型名称',{exact:true}).fill('image-model');
+ await page.screenshot({path:'docs/v2/verification/settings-custom-image.png'});
+ await page.getByRole('button',{name:'LLM',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Codex',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.getByRole('button',{name:'自定义 API',exact:true}).click();
+ await expect(page.getByLabel(/API Key/)).toHaveValue('llm-key-fixture');
+ await page.getByLabel('完整 Base URL',{exact:true}).fill('https://llm.example.invalid/v1');
+ await page.getByLabel('模型名称',{exact:true}).fill('vision-model');
+ await page.getByRole('button',{name:'Codex',exact:true}).click();
+
+ await page.getByRole('button',{name:'生视频',exact:true}).click();
+ await expect(page.getByLabel('素材上传地址（可选）',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('输出分辨率',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('画面比例',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('单段时长上限 / 秒',{exact:true})).toHaveCount(0);
+ await expect(page.getByText('请求生成音频',{exact:true})).toHaveCount(0);
+ await expect(page.locator('.settings-content section').filter({hasText:'生视频'}).locator('input')).toHaveCount(3);
+ await expect(page.getByLabel(/API Key/)).toHaveValue('video-key-fixture');
+ await page.getByLabel('API Base URL').fill('https://example.invalid/api/v3');
+ await page.screenshot({path:'docs/v2/verification/settings-video.png'});
+ await page.getByRole('button',{name:'软件设置',exact:true}).click();
+ await expect(page.getByLabel('数据目录',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'API 设置',exact:true}).click();
+ await expect(page.getByLabel('API Base URL')).toHaveValue('https://example.invalid/api/v3');
+ await page.getByRole('button',{name:'LLM',exact:true}).click();
+ await expect(page.getByLabel('模型',{exact:true})).toHaveValue('fixture-model');
+ await page.getByRole('button',{name:'保存设置',exact:true}).click();
+ await expect(page.getByRole('button',{name:'已保存 ✓',exact:true})).toBeVisible();
+ assert.equal(commands.length,1);assert.equal(commands[0].type,'settings.update');assert.equal(commands[0].patch.storageDir,'/tmp/selected-work-files');assert(!commands[0].patch.exportDir);
+ assert.equal(commands[0].patch.codexModel,'fixture-model');assert.equal(commands[0].patch.ffmpegPath,state.settings.ffmpegPath);assert.equal(commands[0].patch.ffprobePath,state.settings.ffprobePath);assert.equal(commands[0].patch.apiBaseUrl,'https://example.invalid/api/v3');assert.equal(commands[0].patch.apiKey,'video-key-fixture');assert.equal(commands[0].patch.llmApiKey,'llm-key-fixture');assert(!Object.hasOwn(commands[0].patch,'imageApiKey'));assert.equal(commands[0].patch.llmProvider,'codex');assert.equal(commands[0].patch.imageProvider,'custom');assert.equal(commands[0].patch.imageApiModel,'image-model');assert.equal(commands[0].patch.llmApiModel,'vision-model');
+ console.log('PASS: categories, delayed secret loading without blank fields, drafts across tabs and persisted-key save payload. Isolated fixture; no real config writes.');
+}finally{await browser.close();}
